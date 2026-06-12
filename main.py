@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from uvicorn_intelligence.models.inventory_forecast import run_sales_forecast, calculate_inventory_velocity
-from uvicorn_intelligence.models.finance_optimizer import optimize_capital_allocation
+from models.inventory_forecast import run_sales_forecast, calculate_inventory_velocity
+from models.finance_optimizer import optimize_capital_allocation
 from analytics.nirvana_analytics import demand_forecast, expense_anomaly, inventory_velocity, capital_allocation, operations_overview
 
 app = FastAPI(title="Nirvana Intelligence API")
