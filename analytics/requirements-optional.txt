@@ -1,0 +1,3 @@
+# Optional capital-optimization backend. If this fails on the local Python version,
+# Nirvana's capital_allocation job falls back to SciPy optimization.
+riskfolio-lib
