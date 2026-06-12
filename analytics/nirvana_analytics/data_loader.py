@@ -124,13 +124,14 @@ def write_json(payload: dict, output: str | None) -> None:
 
 
 def save_analytics_result(kind: str, payload: dict, summary: str | None = None, status: str = "success") -> dict:
+    import json
     client = get_client()
     row = {
         "kind": kind,
         "status": status,
         "generated_at": payload.get("generated_at"),
         "summary": summary,
-        "payload": payload,
+        "payload": json.loads(json.dumps(payload, default=str)),
     }
     response = client.table("analytics_results").insert(row).execute()
     return (response.data or [{}])[0]

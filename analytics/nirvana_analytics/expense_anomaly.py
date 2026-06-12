@@ -112,7 +112,7 @@ def run(days: int, limit: int) -> dict:
             "source": row.get("source"),
             "id": row.get("id"),
             "shop_id": None if pd.isna(row.get("shop_id")) else row.get("shop_id"),
-            "date": row.get("when"),
+            "date": row.get("when").isoformat() if hasattr(row.get("when"), "isoformat") else str(row.get("when") or ""),
             "amount": round(float(row.get("amount") or 0), 2),
             "category": row.get("category"),
             "label": row.get("label"),
