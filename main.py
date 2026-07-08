@@ -1,10 +1,37 @@
-from fastapi import FastAPI, Query
+import os
+from dotenv import load_dotenv
+load_dotenv("../.env.local")
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Query, Depends, HTTPException, Security, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel
+from loguru import logger
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
+from fastapi_cache.decorator import cache
+
 from models.inventory_forecast import run_sales_forecast, calculate_inventory_velocity
 from models.finance_optimizer import optimize_capital_allocation
 from analytics.nirvana_analytics import demand_forecast, expense_anomaly, inventory_velocity, capital_allocation, operations_overview
 
-app = FastAPI(title="Nirvana Intelligence API")
+API_KEY_NAME = "X-API-KEY"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+def get_api_key(api_key_header: str = Security(api_key_header)):
+    expected_key = os.getenv("INTELLIGENCE_API_KEY")
+    if expected_key and api_key_header != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return api_key_header
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
+    logger.info("Nirvana Intelligence Engine Cache Initialized")
+    yield
+
+app = FastAPI(title="Nirvana Intelligence API", lifespan=lifespan)
 
 # Configure CORS for Next.js app
 app.add_middleware(
@@ -15,9 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class AnalyticsRequest(BaseModel):
+    kind: str = "all"
+
 @app.get("/")
-async def root():
-    import os
+def root():
     return {
         "message": "Nirvana Intelligence Engine is running",
         "env_check": {
@@ -26,12 +55,14 @@ async def root():
         }
     }
 
-@app.post("/api/py/analytics/run")
-async def run_analytics_job(kind: str = Query("all")):
+@app.post("/api/py/analytics/run", dependencies=[Depends(get_api_key)])
+def run_analytics_job(request: AnalyticsRequest):
     """
     Triggers the high-power analytics snapshots and saves results to DB.
-    Replaces the fragile child_process.spawn bridge.
+    Runs in ThreadPool so it doesn't block the event loop.
     """
+    kind = request.kind
+    logger.info(f"Running analytics job: {kind}")
     results = []
     jobs = {
         "demand_forecast": demand_forecast,
@@ -49,7 +80,7 @@ async def run_analytics_job(kind: str = Query("all")):
         
         module = jobs[k]
         try:
-            # Most analytics modules have a run() function with specific signatures
+            logger.debug(f"Executing module {k}")
             if k == "demand_forecast":
                 payload = module.run(days=90, horizon=14, shop_id=None)
             elif k == "expense_anomaly":
@@ -63,7 +94,6 @@ async def run_analytics_job(kind: str = Query("all")):
             else:
                 payload = module.run() if hasattr(module, "run") else {}
             
-            # Use module's internal saver or default logic
             summary = "Snapshot generated"
             if k == "demand_forecast":
                 summary = f"{len(payload.get('forecasts', []))} shop forecasts generated"
@@ -79,14 +109,17 @@ async def run_analytics_job(kind: str = Query("all")):
             from analytics.nirvana_analytics.data_loader import save_analytics_result
             save_analytics_result(k, payload, summary)
             
-            results.append({"kind": k, "ok": True, "summary": summary})
+            logger.info(f"Completed {k}: {summary}")
+            results.append({"kind": k, "ok": True, "summary": summary, "payload": payload})
         except Exception as e:
+            logger.error(f"Error in {k}: {e}")
             results.append({"kind": k, "ok": False, "error": str(e)})
             
     return {"success": all(r["ok"] for r in results), "results": results}
 
 @app.get("/api/py/forecast/sales")
-async def get_sales_forecast(
+@cache(expire=900)
+def get_sales_forecast(
     days: int = Query(90, description="History window in days"),
     horizon: int = Query(14, description="Forecast horizon in days"),
     shopId: str = Query(None, description="Optional shop filter")
@@ -94,20 +127,25 @@ async def get_sales_forecast(
     """
     Returns predicted sales for the next N days.
     """
+    logger.info("Computing sales forecast...")
     return run_sales_forecast(days=days, horizon=horizon, shop_id=shopId)
 
 @app.get("/api/py/inventory/velocity")
-async def get_inventory_velocity():
+@cache(expire=900)
+def get_inventory_velocity():
     """
     Returns how fast products are selling per shop.
     """
+    logger.info("Computing inventory velocity...")
     return calculate_inventory_velocity()
 
 @app.get("/api/py/finance/optimize")
-async def get_finance_optimization():
+@cache(expire=900)
+def get_finance_optimization():
     """
     Returns mathematical optimization for capital allocation.
     """
+    logger.info("Computing finance optimization...")
     return optimize_capital_allocation()
 
 if __name__ == "__main__":

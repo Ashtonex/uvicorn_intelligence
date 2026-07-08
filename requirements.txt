@@ -12,3 +12,6 @@ supabase
 psycopg2-binary
 ipykernel
 jupyterlab
+fastapi-cache2
+prophet
+loguru

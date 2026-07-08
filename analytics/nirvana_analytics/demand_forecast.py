@@ -19,6 +19,14 @@ def _pycaret_available() -> bool:
         return False
 
 
+def _prophet_available() -> bool:
+    try:
+        from prophet import Prophet  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _forecast_series(series: pd.Series, horizon: int) -> list[dict]:
     daily = series.asfreq("D").fillna(0)
     if len(daily) < 14 or daily.sum() <= 0:
@@ -26,9 +34,28 @@ def _forecast_series(series: pd.Series, horizon: int) -> list[dict]:
         forecast = np.repeat(baseline, horizon)
     else:
         forecast = None
-        if _pycaret_available() and len(daily) >= 30:
+        
+        if _prophet_available() and len(daily) >= 28:
+            try:
+                from prophet import Prophet
+                from loguru import logger
+                
+                df_prophet = pd.DataFrame({'ds': daily.index, 'y': daily.values})
+                m = Prophet(daily_seasonality=False, yearly_seasonality=False, weekly_seasonality=True)
+                m.fit(df_prophet)
+                future = m.make_future_dataframe(periods=horizon)
+                prophet_forecast = m.predict(future)
+                preds = prophet_forecast.tail(horizon)['yhat'].values
+                forecast = np.maximum(preds, 0)
+                logger.debug("Successfully used Prophet for forecast")
+            except Exception as e:
+                from loguru import logger
+                logger.error(f"Prophet forecasting failed: {e}. Falling back to PyCaret/Statsmodels.")
+
+        if forecast is None and _pycaret_available() and len(daily) >= 30:
             try:
                 from pycaret.time_series import TSForecastingExperiment
+                from loguru import logger
                 exp = TSForecastingExperiment()
                 df = pd.DataFrame({"sales": daily})
                 df.index = pd.to_datetime(df.index)
@@ -37,10 +64,14 @@ def _forecast_series(series: pd.Series, horizon: int) -> list[dict]:
                 preds = exp.predict_model(best_model)
                 if preds is not None and not preds.empty:
                     forecast = np.maximum(preds["y_pred"].values, 0)
+                    logger.debug("Successfully used PyCaret for forecast")
             except Exception as e:
-                print(f"PyCaret forecasting failed: {e}. Falling back to Statsmodels.")
+                from loguru import logger
+                logger.error(f"PyCaret forecasting failed: {e}. Falling back to Statsmodels.")
         
         if forecast is None:
+            from loguru import logger
+            logger.debug("Falling back to Statsmodels ExponentialSmoothing")
             seasonal_periods = 7 if len(daily) >= 28 else None
             model = ExponentialSmoothing(
                 daily,
