@@ -36,31 +36,61 @@ NON_CASH_CATEGORIES = {
 
 def _expense_frame(days: int) -> pd.DataFrame:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    ledger = load_ledger()
-    operations = load_operations()
+    from .data_loader import load_core_frames
+    frames_data = load_core_frames()
+    ledger = frames_data.ledger
+    operations = frames_data.operations
+    employees = frames_data.employees
+    
+    emp_map = {}
+    if not employees.empty and "id" in employees.columns:
+        if "name" in employees.columns:
+            emp_map = dict(zip(employees["id"].astype(str), employees["name"]))
+        elif "first_name" in employees.columns:
+            emp_map = dict(zip(employees["id"].astype(str), employees["first_name"]))
+            
+    def _resolve_emp(eid):
+        if pd.isna(eid) or not eid: return "Unknown"
+        return emp_map.get(str(eid), str(eid))
 
     frames = []
     if not ledger.empty:
         ledger = ledger.copy()
         ledger["source"] = "ledger_entries"
         ledger["when"] = ledger.get("date")
-        ledger["label"] = ledger.get("description", "").fillna(ledger.get("category", ""))
+        
+        desc = ledger.get("description", pd.Series(index=ledger.index, dtype=str)).replace("", np.nan)
+        cat = ledger.get("category", pd.Series(index=ledger.index, dtype=str)).replace("", np.nan)
+        ledger["label"] = desc.fillna(cat).fillna("Unknown Entry")
+        
+        eid = ledger.get("employee_id", pd.Series(index=ledger.index, dtype=str))
+        ledger["employee_name"] = eid.apply(_resolve_emp)
+        
         ledger = ledger[
             (ledger["when"] >= cutoff)
             & (ledger["amount"] > 0)
             & (~ledger["category"].fillna("").isin(NON_CASH_CATEGORIES))
         ]
-        frames.append(ledger[["source", "id", "shop_id", "when", "amount", "category", "label"]])
+        if not ledger.empty:
+            frames.append(ledger[["source", "id", "shop_id", "when", "amount", "category", "label", "employee_name"]])
 
     if not operations.empty:
         operations = operations.copy()
         operations["source"] = "operations_ledger"
         operations["when"] = operations.get("created_at")
         operations["category"] = operations.get("kind", "")
-        operations["label"] = operations.get("title", "").fillna(operations.get("notes", ""))
+        
+        title = operations.get("title", pd.Series(index=operations.index, dtype=str)).replace("", np.nan)
+        notes = operations.get("notes", pd.Series(index=operations.index, dtype=str)).replace("", np.nan)
+        operations["label"] = title.fillna(notes).fillna("Unknown Operation")
+        
+        eid = operations.get("employee_id", pd.Series(index=operations.index, dtype=str))
+        operations["employee_name"] = eid.apply(_resolve_emp)
+        
         operations = operations[(operations["when"] >= cutoff) & (operations["amount"] < 0)]
         operations["amount"] = operations["amount"].abs()
-        frames.append(operations[["source", "id", "shop_id", "when", "amount", "category", "label"]])
+        if not operations.empty:
+            frames.append(operations[["source", "id", "shop_id", "when", "amount", "category", "label", "employee_name"]])
 
     if not frames:
         return pd.DataFrame()
@@ -116,6 +146,7 @@ def run(days: int, limit: int) -> dict:
             "amount": round(float(row.get("amount") or 0), 2),
             "category": row.get("category"),
             "label": row.get("label"),
+            "employee_name": row.get("employee_name"),
             "reason": row.get("reason"),
             "zscore": round(float(row.get("amount_zscore") or 0), 2),
         })
